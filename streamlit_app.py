@@ -1,66 +1,72 @@
-import altair as alt
-import pandas as pd
 import streamlit as st
+from google import genai
+from google.genai import types
 
-# Show the page title and description.
-st.set_page_config(page_title="Movies dataset", page_icon="🎬")
-st.title("🎬 Movies dataset")
-st.write(
-    """
-    This app visualizes data from [The Movie Database (TMDB)](https://www.kaggle.com/datasets/tmdb/tmdb-movie-metadata).
-    It shows which movie genre performed best at the box office over the years. Just 
-    click on the widgets below to explore!
-    """
-)
+# 1. Page Configuration
+st.set_page_config(page_title="Gemini AI Assistant", page_icon="🤖", layout="centered")
+st.title("🤖 Gemini AI Assistant")
+st.caption("Powered by `gemini-2.5-flash` via the Google Gen AI SDK")
 
+# 2. Secure API Key Retrieval
+# First checks Streamlit Secrets (for production cloud), then fallback to local environment variables
+api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
-# Load the data from a CSV. We're caching this so it doesn't reload every time the app
-# reruns (e.g. if the user interacts with the widgets).
-@st.cache_data
-def load_data():
-    df = pd.read_csv("data/movies_genres_summary.csv")
-    return df
+if not api_key:
+    # Fallback option allowing users to enter a key directly in the sidebar if missing
+    st.sidebar.warning("⚠️ GEMINI_API_KEY missing from environment setup.")
+    api_key = st.sidebar.text_input("Enter your Gemini API Key manually:", type="password")
+    if not api_key:
+        st.info("Please provide your API key in the sidebar to get started.")
+        st.stop()
 
+# 3. Initialize the Gen AI Client
+@st.cache_resource
+def get_genai_client(key):
+    return genai.Client(api_key=key)
 
-df = load_data()
+client = get_genai_client(api_key)
 
-# Show a multiselect widget with the genres using `st.multiselect`.
-genres = st.multiselect(
-    "Genres",
-    df.genre.unique(),
-    ["Action", "Adventure", "Biography", "Comedy", "Drama", "Horror"],
-)
+# 4. Initialize Chat Session State
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# Show a slider widget with the years using `st.slider`.
-years = st.slider("Years", 1986, 2006, (2000, 2016))
+# 5. Display Past Conversation
+for message in st.session_state.chat_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# Filter the dataframe based on the widget input and reshape it.
-df_filtered = df[(df["genre"].isin(genres)) & (df["year"].between(years[0], years[1]))]
-df_reshaped = df_filtered.pivot_table(
-    index="year", columns="genre", values="gross", aggfunc="sum", fill_value=0
-)
-df_reshaped = df_reshaped.sort_values(by="year", ascending=False)
+# 6. Chat Input and Logic
+if user_prompt := st.chat_input("Ask me anything..."):
+    # Render user message immediately
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
+    
+    st.session_state.chat_history.append({"role": "user", "content": user_prompt})
 
-
-# Display the data as a table using `st.dataframe`.
-st.dataframe(
-    df_reshaped,
-    use_container_width=True,
-    column_config={"year": st.column_config.TextColumn("Year")},
-)
-
-# Display the data as an Altair chart using `st.altair_chart`.
-df_chart = pd.melt(
-    df_reshaped.reset_index(), id_vars="year", var_name="genre", value_name="gross"
-)
-chart = (
-    alt.Chart(df_chart)
-    .mark_line()
-    .encode(
-        x=alt.X("year:N", title="Year"),
-        y=alt.Y("gross:Q", title="Gross earnings ($)"),
-        color="genre:N",
-    )
-    .properties(height=320)
-)
-st.altair_chart(chart, use_container_width=True)
+    # Generate streaming response from Gemini 2.5 Flash
+    with st.chat_message("assistant"):
+        response_placeholder = st.empty()
+        full_response = ""
+        
+        try:
+            # Reconstruct entire session context to keep the "Agent" context-aware
+            # Transforming history into standard format for the API
+            formatted_contents = []
+            for msg in st.session_state.chat_history:
+                formatted_contents.append(f"{msg['role'].capitalize()}: {msg['content']}")
+            
+            # Request a streaming response
+            response_stream = client.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents=formatted_contents
+            )
+            
+            for chunk in response_stream:
+                full_response += chunk.text
+                response_placeholder.markdown(full_response + "▌")
+                
+            response_placeholder.markdown(full_response)
+            st.session_state.chat_history.append({"role": "assistant", "content": full_response})
+            
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
