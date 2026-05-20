@@ -1,2 +1,6 @@
 streamlit
 google-genai
+SQLAlchemy
+psycopg2-binary
+plotly
+matplotlib 
