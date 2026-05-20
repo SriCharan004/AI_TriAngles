@@ -15,6 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
+# Custom structural CSS to maximize table scannability and layout typography
 st.markdown("""
     <style>
         .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
@@ -27,47 +28,82 @@ st.markdown("""
 st.title("🤖 LLM-AARS: Live Multi-Agent Chain Ladder Diagnostics")
 st.markdown("---")
 
-# Initialize the cloud database connection
+# Initialize the cloud database connection using configurations in .streamlit/secrets.toml
 conn = st.connection("postgresql", type="sql")
 
-# Initialize the Live Google GenAI Client securely using cloud environment parameters
-try:
+# =====================================================================
+# 2. SECURE API KEY DISCOVERY ENGINE (With Fallback Logic)
+# =====================================================================
+api_key = None
+
+# Check 1: Try reading from Streamlit Secrets Management Cloud Engine (Standard Uppercase)
+if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
-    ai_client = genai.Client(api_key=api_key)
-except Exception as secrets_err:
-    st.error("❌ Critical Error: 'GEMINI_API_KEY' is missing or unreadable within your Streamlit Cloud Secrets dashboard.")
+# Check 2: Try falling back to a nested configuration block if specified differently
+elif "connections" in st.secrets and "gemini_api_key" in st.secrets["connections"]:
+    api_key = st.secrets["connections"]["gemini_api_key"]
+elif "connections" in st.secrets and "GEMINI_API_KEY" in st.secrets["connections"]:
+    api_key = st.secrets["connections"]["GEMINI_API_KEY"]
+
+# If all secure lookups fail, halt gracefully with explicit setup instructions
+if not api_key:
+    st.error("""
+    ❌ **Critical Configuration Missing: 'GEMINI_API_KEY' is unreadable.**
+    
+    **How to fix this error on Streamlit Cloud:**
+    1. Go to your **Streamlit Community Cloud Dashboard**.
+    2. Click the three vertical dots (**...**) next to your running app and select **Settings** ➡️ **Secrets**.
+    3. Ensure your panel text environment matches this exact case-sensitive layout:
+    ```toml
+    GEMINI_API_KEY = "your_actual_api_key_here"
+    ```
+    4. Click **Save** and wait for the app to auto-reload.
+    """)
     st.stop()
+
+# Initialize the live Google GenAI Client securely
+ai_client = genai.Client(api_key=api_key)
 
 try:
     # =====================================================================
-    # 2. DYNAMIC QUANTITATIVE DATA EXTRACTION ENGINE
+    # 3. DYNAMIC QUANTITATIVE DATA EXTRACTION ENGINE
     # =====================================================================
     tx_query = "SELECT * FROM claim_transactions;"
     tx_data = conn.query(tx_query, ttl=0)
     
     if tx_data.empty:
-        st.warning("⚠️ Database table 'claim_transactions' is currently empty. Please verify your data pipeline.")
+        st.warning("⚠️ Database table 'claim_transactions' is currently empty. Please execute your database seeding script.")
         st.stop()
         
+    # Standardize schema mappings to lower-case characters safely
     tx_data.columns = [col.lower() for col in tx_data.columns]
-    loss_column = 'incremental_paid_loss' if 'incremental_paid_loss' in tx_data.columns else tx_data.select_dtypes(include=[np.number]).columns[-1]
+    
+    # Auto-detect target column identifying payment volume
+    loss_column = None
+    for possible_name in ['incremental_paid_loss', 'incremental_loss', 'paid_loss', 'incremental_paid']:
+        if possible_name in tx_data.columns:
+            loss_column = possible_name
+            break
+            
+    if not loss_column:
+        loss_column = tx_data.select_dtypes(include=[np.number]).columns[-1]
 
-    # Automatic Actuarial Dimension Introspection Engine
+    # --- INTROSPECTION LAYER: AUTOMATICALLY EXTRACT DIMENSIONS ---
     all_years = sorted(tx_data['origin_year'].unique().tolist())
     all_devs = sorted(tx_data['development_months'].unique().tolist())
     target_headers = [f"{all_devs[i]}-{all_devs[i+1]} Mo" for i in range(len(all_devs)-1)]
 
-    # Transform transactional ledger matrices to cumulative structures
+    # Pivot incremental financials and roll up into cumulative actuarial triangles
     inc_pivot = tx_data.pivot_table(index='origin_year', columns='development_months', values=loss_column, aggfunc='sum')
     inc_tri = inc_pivot.reindex(index=all_years, columns=all_devs)
     cum_tri = inc_tri.cumsum(axis=1)
     
-    # Calculate native Age-to-Age link factors
+    # Generate true historical Age-to-Age link ratio matrix
     ldf_tri = pd.DataFrame(index=all_years, columns=target_headers)
     for i in range(len(all_devs)-1):
         ldf_tri[target_headers[i]] = cum_tri[all_devs[i+1]] / cum_tri[all_devs[i]]
 
-    # Actuarial Core Model: Volume-Weighted Chain Ladder Averages
+    # --- ACTUARIAL AGENT: VOLUME-WEIGHTED CHAIN LADDER BENCHMARKS ---
     cl_benchmarks = {}
     for i, col in enumerate(target_headers):
         t_prev = all_devs[i]
@@ -76,7 +112,7 @@ try:
         cl_benchmarks[col] = cum_tri.loc[mask, t_curr].sum() / cum_tri.loc[mask, t_prev].sum()
 
     # =====================================================================
-    # 3. SIDEBAR INTERFACE COORDINATOR
+    # 4. SIDEBAR INTERFACE COORDINATOR
     # =====================================================================
     st.sidebar.header("🔍 Deep Dive Coordinator")
     selected_oy = st.sidebar.selectbox("Select Origin Year for Analysis Row:", all_years, index=len(all_years)-2 if len(all_years) > 1 else 0)
@@ -88,7 +124,7 @@ try:
         st.rerun()
 
     # =====================================================================
-    # 4. LIVE COGNITIVE AI AGENT COURIER LAYER (Structured JSON Schema Engine)
+    # 5. LIVE COGNITIVE AI AGENT COURIER LAYER (Structured JSON Schema Engine)
     # =====================================================================
     notes_all_query = "SELECT * FROM claim_notes;"
     notes_all_df = conn.query(notes_all_query, ttl=0)
@@ -99,13 +135,13 @@ try:
     llm_reasons = {}
     agent_shap_contributions = {} 
 
-    # We use st.spinner so the user knows Gemini is actively calculating values down the loop
+    # Implement progress indicator wrapper across live API generations
     with st.spinner("🤖 Multi-Agent Engine is mining claims text logs via Gemini Pro..."):
         for i, col in enumerate(target_headers):
             dev_month_target = all_devs[i+1]
             col_baseline = cl_benchmarks[col]
             
-            # Extract cell text logs
+            # Isolate text segment to match chosen cell intersection (Row & Column matching)
             if not notes_all_df.empty:
                 cell_notes = notes_all_df[
                     (notes_all_df['development_months'] == dev_month_target) & 
@@ -119,13 +155,13 @@ try:
             agent_delta = 0.0
             reason_string = "Stable trend: Development matches historical patterns; standard parameters appropriate."
 
-            # If text is caught, prompt Gemini to calculate the risk loading coefficient dynamically
+            # If matching text diaries exist, prompt Gemini to calculate cognitive risk metrics
             if combined_text:
                 prompt = f"""
                 You are an expert Casualty Actuarial Pricing and Reserving AI Agent. 
                 Analyze these unstructured adjuster diary logs for Origin Year {selected_oy} during the {col} maturity development step.
                 
-                RAW NOTES:
+                RAW NOTES FROM ADJUSTERS:
                 "{combined_text}"
                 
                 YOUR TASK:
@@ -143,7 +179,7 @@ try:
                 """
                 
                 try:
-                    # Execute structured json instruction using the 2.0 SDK client
+                    # Execute structured json instruction using the official 2.0 SDK client
                     response = ai_client.models.generate_content(
                         model='gemini-2.5-flash',
                         contents=prompt,
@@ -166,12 +202,12 @@ try:
             agent_shap_contributions[col] = agent_delta
 
     # =====================================================================
-    # 5. SUMMARY MATRIX COMPILATION LAYER
+    # 6. SUMMARY MATRIX COMPILATION LAYER
     # =====================================================================
     summary_matrix = ldf_tri.copy().map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
     summary_matrix.index = summary_matrix.index.astype(str)
     
-    # Compute rolling chronological averages dynamically
+    # --- CHRONOLOGICAL ROLLING N-YEAR AVERAGE ENG COMPILATION ---
     max_averages_needed = 3
     for n in range(1, max_averages_needed + 1):
         rolling_row_values = []
@@ -192,7 +228,7 @@ try:
     st.dataframe(summary_matrix, use_container_width=True)
 
     # =====================================================================
-    # 6. SHAP WATERFALL ATTRIBUTION VISUALIZER
+    # 7. SHAP WATERFALL ATTRIBUTION VISUALIZER
     # =====================================================================
     st.write("---")
     st.subheader(f"🤖 Agent SHAP Explanation Summary for Profile Column: {selected_col}")
