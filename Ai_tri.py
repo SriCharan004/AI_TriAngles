@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from google import genai
+from google.genai import types
+import json
 
 # =====================================================================
 # 1. PAGE CONFIGURATION & LAYOUT SPECIFICATIONS
@@ -12,7 +15,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom structural CSS to maximize table scannability and layout typography
 st.markdown("""
     <style>
         .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
@@ -22,11 +24,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🤖 LLM-AARS: AI Agent-Driven Reserving Engine")
+st.title("🤖 LLM-AARS: Live Multi-Agent Chain Ladder Diagnostics")
 st.markdown("---")
 
-# Initialize the cloud database connection using configurations in .streamlit/secrets.toml
+# Initialize the cloud database connection
 conn = st.connection("postgresql", type="sql")
+
+# Initialize the Live Google GenAI Client securely using cloud environment parameters
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    ai_client = genai.Client(api_key=api_key)
+except Exception as secrets_err:
+    st.error("❌ Critical Error: 'GEMINI_API_KEY' is missing or unreadable within your Streamlit Cloud Secrets dashboard.")
+    st.stop()
 
 try:
     # =====================================================================
@@ -36,38 +46,28 @@ try:
     tx_data = conn.query(tx_query, ttl=0)
     
     if tx_data.empty:
-        st.warning("⚠️ Database table 'claim_transactions' is currently empty. Please execute your database seeding script.")
+        st.warning("⚠️ Database table 'claim_transactions' is currently empty. Please verify your data pipeline.")
         st.stop()
         
-    # Standardize schema mappings to lower-case characters safely
     tx_data.columns = [col.lower() for col in tx_data.columns]
-    
-    # Auto-detect target column identifying payment volume
-    loss_column = None
-    for possible_name in ['incremental_paid_loss', 'incremental_loss', 'paid_loss', 'incremental_paid']:
-        if possible_name in tx_data.columns:
-            loss_column = possible_name
-            break
-            
-    if not loss_column:
-        loss_column = tx_data.select_dtypes(include=[np.number]).columns[-1]
+    loss_column = 'incremental_paid_loss' if 'incremental_paid_loss' in tx_data.columns else tx_data.select_dtypes(include=[np.number]).columns[-1]
 
-    # --- INTROSPECTION LAYER: AUTOMATICALLY EXTRACT DIMENSIONS ---
+    # Automatic Actuarial Dimension Introspection Engine
     all_years = sorted(tx_data['origin_year'].unique().tolist())
     all_devs = sorted(tx_data['development_months'].unique().tolist())
     target_headers = [f"{all_devs[i]}-{all_devs[i+1]} Mo" for i in range(len(all_devs)-1)]
 
-    # Pivot incremental financials and roll up into cumulative actuarial triangles
+    # Transform transactional ledger matrices to cumulative structures
     inc_pivot = tx_data.pivot_table(index='origin_year', columns='development_months', values=loss_column, aggfunc='sum')
     inc_tri = inc_pivot.reindex(index=all_years, columns=all_devs)
     cum_tri = inc_tri.cumsum(axis=1)
     
-    # Generate true historical Age-to-Age link ratio matrix
+    # Calculate native Age-to-Age link factors
     ldf_tri = pd.DataFrame(index=all_years, columns=target_headers)
     for i in range(len(all_devs)-1):
         ldf_tri[target_headers[i]] = cum_tri[all_devs[i+1]] / cum_tri[all_devs[i]]
 
-    # --- ACTUARIAL AGENT: VOLUME-WEIGHTED CHAIN LADDER BENCHMARKS ---
+    # Actuarial Core Model: Volume-Weighted Chain Ladder Averages
     cl_benchmarks = {}
     for i, col in enumerate(target_headers):
         t_prev = all_devs[i]
@@ -88,7 +88,7 @@ try:
         st.rerun()
 
     # =====================================================================
-    # 4. QUALITATIVE COGNITIVE AI AGENT PARSER
+    # 4. LIVE COGNITIVE AI AGENT COURIER LAYER (Structured JSON Schema Engine)
     # =====================================================================
     notes_all_query = "SELECT * FROM claim_notes;"
     notes_all_df = conn.query(notes_all_query, ttl=0)
@@ -99,63 +99,71 @@ try:
     llm_reasons = {}
     agent_shap_contributions = {} 
 
-    for i, col in enumerate(target_headers):
-        dev_month_target = all_devs[i+1]
-        col_baseline = cl_benchmarks[col]
-        
-        # Isolate text segment to match chosen cell intersection (Row & Column matching)
-        if not notes_all_df.empty:
-            cell_notes = notes_all_df[
-                (notes_all_df['development_months'] == dev_month_target) & 
-                (notes_all_df['origin_year'] == selected_oy)
-            ]
-            combined_text = " ".join(cell_notes['note_text'].astype(str)).lower() if not cell_notes.empty else ""
-        else:
-            combined_text = ""
+    # We use st.spinner so the user knows Gemini is actively calculating values down the loop
+    with st.spinner("🤖 Multi-Agent Engine is mining claims text logs via Gemini Pro..."):
+        for i, col in enumerate(target_headers):
+            dev_month_target = all_devs[i+1]
+            col_baseline = cl_benchmarks[col]
+            
+            # Extract cell text logs
+            if not notes_all_df.empty:
+                cell_notes = notes_all_df[
+                    (notes_all_df['development_months'] == dev_month_target) & 
+                    (notes_all_df['origin_year'] == selected_oy)
+                ]
+                combined_text = " ".join(cell_notes['note_text'].astype(str)).strip() if not cell_notes.empty else ""
+            else:
+                combined_text = ""
 
-        # --- THE AI AGENT HEURISTIC STRUCTURAL LOADER ---
-        agent_severity_coefficient = 0.0
-        reason_string = "Stable trend: Development matches historical patterns; standard parameters appropriate."
+            # Standard defaults if no unstructured notes exist for the cell coordinate intersection
+            agent_delta = 0.0
+            reason_string = "Stable trend: Development matches historical patterns; standard parameters appropriate."
 
-        if combined_text:
-            # Condition A: Material Price & Resource Inflation
-            if "inflation" in combined_text or "spike" in combined_text:
-                base_inflation_impact = 0.10
-                modifier = 1.5 if "severe" in combined_text else 1.0
-                agent_severity_coefficient += (base_inflation_impact * modifier)
-                reason_string = f"AI Agent Adjustment (+{agent_severity_coefficient:.2f}): Inflationary pressures and supply line index spikes active."
-
-            # Condition B: Litigation, Social Inflation, and Court Venues
-            if "verdict" in combined_text or "court" in combined_text or "jury" in combined_text:
-                base_legal_impact = 0.06
-                modifier = 2.0 if "nuclear" in combined_text else 1.0
-                agent_severity_coefficient += (base_legal_impact * modifier)
-                reason_string = f"AI Agent Adjustment (+{agent_severity_coefficient:.2f}): Nuclear social inflation trial vectors realized."
-
-            # Condition C: Reinsurance Salvage & Subrogation Recovery Offsets
-            if "subrogation" in combined_text or "salvage" in combined_text or "recovery" in combined_text:
-                base_recovery_impact = -0.08
-                modifier = 1.5 if "massive" in combined_text else 1.0
-                agent_severity_coefficient += (base_recovery_impact * modifier)
-                reason_string = f"AI Agent Adjustment ({agent_severity_coefficient:.2f}): Major subrogation cash inflows masking gross losses."
-
-            # Condition D: Claims Settlement Acceleration Processes
-            if "speed" in combined_text or "closing" in combined_text or "lightning" in combined_text:
-                base_speed_impact = -0.05
-                modifier = 1.6 if "lightning" in combined_text else 1.0
-                agent_severity_coefficient += (base_speed_impact * modifier)
-                reason_string = f"AI Agent Adjustment ({agent_severity_coefficient:.2f}): Process operational speed-up clearing legacy open files."
+            # If text is caught, prompt Gemini to calculate the risk loading coefficient dynamically
+            if combined_text:
+                prompt = f"""
+                You are an expert Casualty Actuarial Pricing and Reserving AI Agent. 
+                Analyze these unstructured adjuster diary logs for Origin Year {selected_oy} during the {col} maturity development step.
                 
-            # Condition E: Tail-End Latent Claims Reopenings
-            if "reopen" in combined_text or "latent" in combined_text:
-                base_reopen_impact = 0.12
-                modifier = 1.8 if "spinal" in combined_text or "severe" in combined_text else 1.0
-                agent_severity_coefficient += (base_reopen_impact * modifier)
-                reason_string = f"AI Agent Adjustment (+{agent_severity_coefficient:.2f}): Latent risk manifestations forcing unexpected tail reopens."
+                RAW NOTES:
+                "{combined_text}"
+                
+                YOUR TASK:
+                1. Determine the systemic risk impact of this text on our standard Link Ratio calculation.
+                2. Calculate an appropriate 'risk_loading_coefficient' (a floating point decimal shift value).
+                   - For inflation, catastrophe, or late re-opened claims, return a positive number between +0.02 and +0.35 depending on severity.
+                   - For subrogation recovery cash inflows or process settlement acceleration, return a negative number between -0.02 and -0.25.
+                3. Write a professional, concise 'audit_rationale' sentence summarizing your decision.
+                
+                You must return your response inside a valid JSON object matching this schema:
+                {{
+                  "risk_loading_coefficient": float,
+                  "audit_rationale": "string"
+                }}
+                """
+                
+                try:
+                    # Execute structured json instruction using the 2.0 SDK client
+                    response = ai_client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1
+                        )
+                    )
+                    
+                    # Parse token outputs safely
+                    result_data = json.loads(response.text)
+                    agent_delta = float(result_data.get("risk_loading_coefficient", 0.0))
+                    reason_string = f"AI Agent Selection (+{agent_delta:+.2f}): " + str(result_data.get("audit_rationale", ""))
+                except Exception as ai_err:
+                    reason_string = f"AI Agent Evaluation Bypass: Fallback applied. Trace: {ai_err}"
+                    agent_delta = 0.0
 
-        llm_suggestions[col] = col_baseline + agent_severity_coefficient
-        llm_reasons[col] = reason_string
-        agent_shap_contributions[col] = agent_severity_coefficient
+            llm_suggestions[col] = col_baseline + agent_delta
+            llm_reasons[col] = reason_string
+            agent_shap_contributions[col] = agent_delta
 
     # =====================================================================
     # 5. SUMMARY MATRIX COMPILATION LAYER
@@ -163,7 +171,7 @@ try:
     summary_matrix = ldf_tri.copy().map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
     summary_matrix.index = summary_matrix.index.astype(str)
     
-    # --- CHRONOLOGICAL ROLLING N-YEAR AVERAGE ENG COMPILATION ---
+    # Compute rolling chronological averages dynamically
     max_averages_needed = 3
     for n in range(1, max_averages_needed + 1):
         rolling_row_values = []
@@ -175,7 +183,7 @@ try:
                 rolling_row_values.append("-")
         summary_matrix.loc[f"{n} year"] = rolling_row_values
 
-    # Append core summary actuarial variables and textual narratives
+    # Merge dynamic baselines and calculations into a single table
     summary_matrix.loc["LDF"] = [f"{cl_benchmarks[c]:.2f}" for c in target_headers]
     summary_matrix.loc["LLM Suggested"] = [f"{llm_suggestions[c]:.2f}" for c in target_headers]
     summary_matrix.loc["Reason"] = [llm_reasons[c] for c in target_headers]
