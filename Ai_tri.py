@@ -41,9 +41,9 @@ if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
 # Check 2: Try falling back to a nested configuration block if specified differently
 elif "connections" in st.secrets and "gemini_api_key" in st.secrets["connections"]:
-    api_key = st.secrets["connections"]["gemini_api_key"]
-elif "connections" in st.secrets and "GEMINI_API_KEY" in st.secrets["connections"]:
     api_key = st.secrets["connections"]["GEMINI_API_KEY"]
+elif "connections" in st.secrets and "GEMINI_API_KEY" in st.secrets["connections"]:
+    api_key = st.secrets["connections"]["GEMINI_API_KEY "]
 
 # If all secure lookups fail, halt gracefully with explicit setup instructions
 if not api_key:
